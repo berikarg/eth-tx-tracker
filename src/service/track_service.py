@@ -41,6 +41,12 @@ class FoundTransfer:
     track: Track
     tx_hash: str
 
+class TrackAlreadyExistsError(Exception):
+    def __init__(self, track: Track):
+        self.message = (f"Tracking request for address {track.address} amount {track.amount} "
+                        f"contract {track.contract_address} already exists.")
+        super().__init__(self.message)
+
 def find_eth_transfers(
     transactions: List[TxData],
     tracks: Set[Track]
@@ -89,6 +95,8 @@ class TrackService:
             contract = self.web3.eth.contract(address=contract_address, abi=ERC20_ABI)
             decimals = await contract.functions.decimals().call()
         track = Track(address=address, amount=req.amount, decimals=decimals, contract_address=contract_address)
+        if self.repository.exists(track):
+            raise TrackAlreadyExistsError(track)
         self.repository.add_track(track)
         return track
 

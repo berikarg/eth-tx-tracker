@@ -14,3 +14,6 @@ class TrackRepository:
 
     def remove_track(self, track: Track) -> None:
         self._tracks.remove(track)
+
+    def exists(self, track: Track) -> bool:
+        return track in self._tracks
