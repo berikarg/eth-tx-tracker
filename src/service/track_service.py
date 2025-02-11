@@ -1,14 +1,13 @@
 import logging
-import asyncio
-import traceback
 from typing import List, Set
 from decimal import Decimal
 from dataclasses import dataclass
 
-from web3 import Web3, AsyncWeb3
+from web3 import Web3, AsyncWeb3, WebSocketProvider
 from web3.providers.rpc import AsyncHTTPProvider
 from web3.types import BlockData, TxData, LogReceipt
 from web3.exceptions import ContractLogicError, ABIEventNotFound, ABIFunctionNotFound, BadFunctionCallOutput
+from web3.utils.subscriptions import NewHeadsSubscription, NewHeadsSubscriptionContext
 
 from src.repository.track_repository import TrackRepository
 from src.models.track import Track
@@ -78,9 +77,10 @@ def find_eth_transfers(
 
 
 class TrackService:
-    def __init__(self, repository: TrackRepository, eth_rpc_url: str, logger: logging.Logger):
+    def __init__(self, repository: TrackRepository, http_rpc_url: str, ws_rpc_url: str, logger: logging.Logger):
         self.repository = repository
-        self.web3 = AsyncWeb3(AsyncHTTPProvider(eth_rpc_url))
+        self.web3 = AsyncWeb3(AsyncHTTPProvider(http_rpc_url))
+        self.web3ws = AsyncWeb3(WebSocketProvider(ws_rpc_url))
         self.logger = logger
         self._last_processed_block = 0
 
@@ -122,24 +122,25 @@ class TrackService:
         return self.repository.list_tracks()
 
     async def start_block_listener(self) -> None:
-        # Get the latest block at startup
-        self._last_processed_block = await self.web3.eth.block_number
-        self.logger.info(f"Starting block listener from block {self._last_processed_block}")
+        await self.web3ws.provider.connect()
+        if not await self.web3ws.is_connected():
+            raise RuntimeError("Failed to connect to the WebSocket provider.")
 
-        while True:
-            try:
-                current_block = await self.web3.eth.block_number
-                if current_block > self._last_processed_block:
-                    for block_num in range(self._last_processed_block + 1, current_block + 1):
-                        self.logger.info(f"Checking block {block_num}")
-                        block = await self.web3.eth.get_block(block_num, full_transactions=True)
-                        await self._process_block(block)
-                    self._last_processed_block = current_block
-                await asyncio.sleep(1)
+        await self.web3ws.subscription_manager.subscribe(
+            NewHeadsSubscription(
+                handler=self.new_heads_handler
+            ),
+        )
+        await self.web3ws.subscription_manager.handle_subscriptions()
 
-            except Exception:
-                self.logger.error(f"Error in block listener: {traceback.format_exc()}")
-                await asyncio.sleep(5)
+    async def new_heads_handler(
+            self,
+            handler_context: NewHeadsSubscriptionContext,
+    ) -> None:
+        header = handler_context.result
+        block = await self.web3.eth.get_block(header["number"], full_transactions=True)
+        self.logger.info(f"Checking block {block["number"]}")
+        await self._process_block(block)
 
     async def _process_block(self, block: BlockData) -> None:
         tracks = self.repository.list_tracks()

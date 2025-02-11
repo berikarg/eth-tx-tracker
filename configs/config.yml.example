@@ -1,0 +1,5 @@
+http_rpc_url: "https://sepolia.infura.io/v3/API_KEY"
+ws_rpc_url: "wss://sepolia.infura.io/ws/v3/API_KEY"
+
+host: "127.0.0.1"
+port: 8000

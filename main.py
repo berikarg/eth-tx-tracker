@@ -1,7 +1,8 @@
 import asyncio
 import logging
-import os
+import argparse
 
+import yaml
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 import uvicorn
@@ -17,10 +18,14 @@ def main():
     )
     logger = logging.getLogger(__name__)
 
-    track_repository = TrackRepository()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-c", "--config", help="path to yaml config", default="./configs/config.yml")
+    args = parser.parse_args()
+    with open(args.config, 'r') as file:
+        config = yaml.safe_load(file)
 
-    eth_rpc_url = os.getenv("ETH_RPC_URL", "https://sepolia.infura.io/v3/c05e8158ffb24160aa5a9d212e56223e")
-    track_service = TrackService(track_repository, eth_rpc_url, logger)
+    track_repository = TrackRepository()
+    track_service = TrackService(track_repository, config["http_rpc_url"], config["ws_rpc_url"], logger)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -31,16 +36,13 @@ def main():
         title="Ethereum Transaction Tracker",
         description="Service to track ETH and ERC-20 transactions.",
         version="1.0.0",
-        openapi_url="/openapi.json",
-        docs_url="/docs",
-        redoc_url="/redoc",
         lifespan=lifespan,
     )
 
     track_router = create_track_router(track_service)
     app.include_router(track_router)
 
-    uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run(app, host=config["host"], port=config["port"])
 
 if __name__ == "__main__":
     main()
