@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from typing import List, Set
 from decimal import Decimal
 from dataclasses import dataclass
@@ -6,7 +7,7 @@ from dataclasses import dataclass
 from web3 import Web3, AsyncWeb3, WebSocketProvider
 from web3.providers.rpc import AsyncHTTPProvider
 from web3.types import BlockData, TxData, LogReceipt
-from web3.exceptions import ContractLogicError, ABIEventNotFound, ABIFunctionNotFound, BadFunctionCallOutput
+from web3.exceptions import ContractLogicError, ABIEventNotFound, ABIFunctionNotFound, BadFunctionCallOutput, ProviderConnectionError, BlockNotFound
 from web3.utils.subscriptions import NewHeadsSubscription, NewHeadsSubscriptionContext
 
 from src.repository.track_repository import TrackRepository
@@ -122,25 +123,45 @@ class TrackService:
         return self.repository.list_tracks()
 
     async def start_block_listener(self) -> None:
-        await self.web3ws.provider.connect()
-        if not await self.web3ws.is_connected():
-            raise RuntimeError("Failed to connect to the WebSocket provider.")
+        for attempt in range(3):
+            try:
+                await self.web3ws.provider.connect()
+                if not await self.web3ws.is_connected():
+                    raise RuntimeError("Failed to connect to the WebSocket provider.")
 
-        await self.web3ws.subscription_manager.subscribe(
-            NewHeadsSubscription(
-                handler=self.new_heads_handler
-            ),
-        )
-        await self.web3ws.subscription_manager.handle_subscriptions()
+                await self.web3ws.subscription_manager.subscribe(
+                    NewHeadsSubscription(
+                        handler=self.new_heads_handler
+                    ),
+                )
+                await self.web3ws.subscription_manager.handle_subscriptions()
+                break
+            except (ProviderConnectionError, RuntimeError) as e:
+                self.logger.error(f"Connection attempt {attempt + 1} failed: {str(e)}")
+                await asyncio.sleep(2 ** attempt)
 
-    async def new_heads_handler(
-            self,
-            handler_context: NewHeadsSubscriptionContext,
-    ) -> None:
+    async def new_heads_handler(self, handler_context: NewHeadsSubscriptionContext) -> None:
         header = handler_context.result
-        block = await self.web3.eth.get_block(header["number"], full_transactions=True)
-        self.logger.info(f"Checking block {block["number"]}")
-        await self._process_block(block)
+        block_number = header.get("number")
+
+        if block_number is None:
+            self.logger.warning("Received new header without a valid 'number'.")
+            return
+
+        try:
+            block = await self.web3.eth.get_block(block_number, full_transactions=True)
+        except BlockNotFound:
+            self.logger.warning(f"Block {block_number} not found on the node.")
+            return
+        except Exception as e:
+            self.logger.error(f"Error fetching block {block_number}: {e}")
+            return
+
+        self.logger.info(f"Checking block {block['number']}")
+        try:
+            await self._process_block(block)
+        except Exception as e:
+            self.logger.error(f"Error processing block {block_number}: {e}")
 
     async def _process_block(self, block: BlockData) -> None:
         tracks = self.repository.list_tracks()

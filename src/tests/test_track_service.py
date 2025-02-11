@@ -75,11 +75,19 @@ from src.service.track_service import TrackService, find_eth_transfers, FoundTra
         (
             "Two transactions, both match",
             [
-                {"to": "0x111", "value": 10 ** 18, "hash": b"\x05"},  # mismatch
-                {"to": "0xabc", "value": int(3 * 10 ** 18), "hash": b"\x06"},  # match
+                {"to": "0x111", "value": 10 ** 18, "hash": b"\x05"},
+                {"to": "0xabc", "value": int(3 * 10 ** 18), "hash": b"\x06"},
             ],
             {Track(address="0xabc", amount=Decimal("3.0"), decimals=18), Track(address="0x111", amount=Decimal("1.0"), decimals=18)},
             {Track(address="0xabc", amount=Decimal("3.0"), decimals=18), Track(address="0x111", amount=Decimal("1.0"), decimals=18)},
+        ),
+(
+            "One transaction, two tracks, one match",
+            [
+                {"to": "0xabc", "value": int(3 * 10 ** 18), "hash": b"\x06"},  # match
+            ],
+            {Track(address="0xabc", amount=Decimal("3.0"), decimals=18), Track(address="0x111", amount=Decimal("1.0"), decimals=18)},
+            {Track(address="0xabc", amount=Decimal("3.0"), decimals=18)},
         ),
     ]
 )
