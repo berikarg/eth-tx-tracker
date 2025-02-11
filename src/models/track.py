@@ -8,7 +8,7 @@ class Track:
         self.contract_address = contract_address
         self.decimals = decimals
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         if not isinstance(other, Track):
             return NotImplemented
         return (self.address == other.address and
@@ -16,5 +16,5 @@ class Track:
                 self.decimals == other.decimals and
                 self.contract_address == other.contract_address)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.address, self.amount, self.decimals, self.contract_address))

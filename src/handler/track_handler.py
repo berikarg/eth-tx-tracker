@@ -1,4 +1,7 @@
+from typing import List
+
 from fastapi import APIRouter, HTTPException, status
+
 from src.models.track_request import TrackRequest
 from src.service.track_service import TrackService, TrackAlreadyExistsError
 
@@ -33,7 +36,7 @@ def create_track_router(track_service: TrackService) -> APIRouter:
             }
         }
     )
-    async def track_transaction(req: TrackRequest):
+    async def track_transaction(req: TrackRequest) -> dict:
         """
         Registers a request to track an incoming transaction.
         """
@@ -52,7 +55,7 @@ def create_track_router(track_service: TrackService) -> APIRouter:
         return {"status": "ok", "message": f"Tracking request for {track.address} registered"}
 
     @router.get("/tracks", tags=["Debug"], summary="List all tracking requests")
-    async def list_tracks():
+    async def list_tracks() -> List[dict]:
         """
         Returns all tracked items for debugging.
         """
