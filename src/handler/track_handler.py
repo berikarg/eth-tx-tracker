@@ -44,6 +44,11 @@ def create_track_router(track_service: TrackService) -> APIRouter:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=e.message
             )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(e)
+            )
         return {"status": "ok", "message": f"Tracking request for {track.address} registered"}
 
     @router.get("/tracks", tags=["Debug"], summary="List all tracking requests")

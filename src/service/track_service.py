@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from web3 import Web3, AsyncWeb3
 from web3.providers.rpc import AsyncHTTPProvider
 from web3.types import BlockData, TxData, LogReceipt
+from web3.exceptions import ContractLogicError, ABIEventNotFound, ABIFunctionNotFound, BadFunctionCallOutput
 
 from src.repository.track_repository import TrackRepository
 from src.models.track import Track
@@ -85,18 +86,35 @@ class TrackService:
 
     async def create_track(self, req: TrackRequest) -> Track:
         address = self.web3.to_checksum_address(req.address)
-        contract_address = (
-            self.web3.to_checksum_address(req.contract_address)
-            if req.contract_address
-            else None
-        )
-        decimals = 18 # for ETH
+        try:
+            contract_address = (
+                self.web3.to_checksum_address(req.contract_address)
+                if req.contract_address
+                else None
+            )
+        except ValueError:
+            raise ValueError("The provided contract address is not valid")
+        decimals = 18  # Default for ETH, will be requested for tokens
+
+        # If a contract address is provided, check its validity as an ERC20 contract
         if contract_address is not None:
-            contract = self.web3.eth.contract(address=contract_address, abi=ERC20_ABI)
-            decimals = await contract.functions.decimals().call()
+            # Check if contract has 'decimals' function and 'Transfer' event
+            try:
+                contract = self.web3.eth.contract(address=contract_address, abi=ERC20_ABI)
+                decimals = await contract.functions.decimals().call()
+
+                transfer_event = contract.events.Transfer
+                if not transfer_event:
+                    raise ValueError("The provided contract does not have a 'Transfer' event")
+
+            except (ContractLogicError, ABIEventNotFound, ABIFunctionNotFound, BadFunctionCallOutput):
+                raise ValueError("The provided contract is not a valid ERC20 contract")
+
         track = Track(address=address, amount=req.amount, decimals=decimals, contract_address=contract_address)
+
         if self.repository.exists(track):
             raise TrackAlreadyExistsError(track)
+
         self.repository.add_track(track)
         return track
 
