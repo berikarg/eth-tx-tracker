@@ -10,7 +10,7 @@ def create_track_router(track_service: TrackService) -> APIRouter:
         """
         Registers a request to track an incoming transaction.
         """
-        track = track_service.create_track(req)
+        track = await track_service.create_track(req)
         return {"status": "ok", "message": f"Tracking request for {track.address} registered"}
 
     @router.get("/tracks", tags=["Debug"], summary="List all tracking requests")
@@ -24,7 +24,7 @@ def create_track_router(track_service: TrackService) -> APIRouter:
                 "address": t.address,
                 "contract_address": t.contract_address,
                 "amount": str(t.amount),
-                "is_found": t.is_found
+                "decimals": t.decimals
             }
             for t in tracks
         ]

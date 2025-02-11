@@ -1,13 +1,13 @@
 import logging
 import asyncio
 import traceback
-from typing import List
+from typing import List, Set
 from decimal import Decimal
+from dataclasses import dataclass
 
 from web3 import Web3, AsyncWeb3
 from web3.providers.rpc import AsyncHTTPProvider
-from web3.types import BlockData, TxData
-from eth_typing import ChecksumAddress
+from web3.types import BlockData, TxData, LogReceipt
 
 from src.repository.track_repository import TrackRepository
 from src.models.track import Track
@@ -36,6 +36,39 @@ ERC20_ABI = [
 ]
 TRANSFER_TOPIC = "0x" + Web3.keccak(text="Transfer(address,address,uint256)").hex()
 
+@dataclass(frozen=True)
+class FoundTransfer:
+    track: Track
+    tx_hash: str
+
+def find_eth_transfers(
+    transactions: List[TxData],
+    tracks: Set[Track]
+) -> List[FoundTransfer]:
+    """
+    Looks for ETH transfers matching any track. Returns a list of FoundTransfer objects.
+    """
+    eth_tracks = [t for t in tracks if t.contract_address is None]
+    if not eth_tracks:
+        return []
+
+    found_transfers: List[FoundTransfer] = []
+    for tx in transactions:
+        to_addr = tx["to"]
+        value_wei = tx["value"]
+        tx_hash = tx["hash"].hex()
+
+        if not to_addr:
+            continue
+
+        for track in eth_tracks:
+            if to_addr.lower() == track.address.lower():
+                eth_value = Decimal(value_wei) / Decimal(10**18)
+                if eth_value == track.amount:
+                    found_transfers.append(FoundTransfer(track=track, tx_hash=tx_hash))
+
+    return found_transfers
+
 
 class TrackService:
     def __init__(self, repository: TrackRepository, eth_rpc_url: str, logger: logging.Logger):
@@ -44,18 +77,22 @@ class TrackService:
         self.logger = logger
         self._last_processed_block = 0
 
-    def create_track(self, req: TrackRequest) -> Track:
+    async def create_track(self, req: TrackRequest) -> Track:
         address = self.web3.to_checksum_address(req.address)
         contract_address = (
             self.web3.to_checksum_address(req.contract_address)
             if req.contract_address
             else None
         )
-        track = Track(address=address, amount=req.amount, contract_address=contract_address)
+        decimals = 18 # for ETH
+        if contract_address is not None:
+            contract = self.web3.eth.contract(address=contract_address, abi=ERC20_ABI)
+            decimals = await contract.functions.decimals().call()
+        track = Track(address=address, amount=req.amount, decimals=decimals, contract_address=contract_address)
         self.repository.add_track(track)
         return track
 
-    def list_tracks(self) -> List[Track]:
+    def list_tracks(self) -> Set[Track]:
         return self.repository.list_tracks()
 
     async def start_block_listener(self) -> None:
@@ -74,7 +111,7 @@ class TrackService:
                     self._last_processed_block = current_block
                 await asyncio.sleep(1)
 
-            except Exception as e:
+            except Exception:
                 self.logger.error(f"Error in block listener: {traceback.format_exc()}")
                 await asyncio.sleep(5)
 
@@ -86,71 +123,53 @@ class TrackService:
         block_number = block["number"]
         transactions = block["transactions"]
 
-        # 1) Find ETH transfers (updates tracks in-place)
-        self._find_eth_transfers(transactions, tracks, block_number)
+        found_transfers = find_eth_transfers(transactions, tracks)
+        for ft in found_transfers:
+            self.logger.info(
+                f"Found ETH Transfer: block={block_number}, "
+                f"to={ft.track.address}, amount={ft.track.amount}, tx=0x{ft.tx_hash}"
+            )
+            self.repository.remove_track(ft.track)
 
-        # 2) For ERC-20, build a set of contract addresses we track
+        # For ERC-20, build a set of contract addresses we track
         contract_addresses = list({self.web3.to_checksum_address(t.contract_address.lower())
                                    for t in tracks if t.contract_address})
-
-        if contract_addresses:
-            await self._process_erc20_logs(block_number, contract_addresses, tracks)
-
-
-    def _find_eth_transfers(
-        self, transactions: List[TxData], tracks: List[Track], block_number: int
-    ) -> None:
-        """
-        Looks for ETH transfers matching any track. Updates `track.is_found`
-        if an exact match is found. (No return value; modifies in place.)
-        """
-        eth_tracks = [t for t in tracks if t.contract_address is None and not t.is_found]
-        if not eth_tracks:
+        if not contract_addresses:
             return
 
-        for tx in transactions:
-            to_addr = tx["to"]
-            value_wei = tx["value"]
-            tx_hash = tx["hash"].hex()
-
-            if not to_addr:
-                continue
-            for track in eth_tracks:
-                # Compare addresses
-                if to_addr.lower() != track.address.lower():
-                    continue
-                    # Wei -> ETH
-                eth_value = Decimal(value_wei) / Decimal(10 ** 18)
-                if eth_value == track.amount:
-                    self.logger.info(
-                        f"[Block {block_number}] Found ETH transfer {eth_value} to {to_addr}, tx={tx_hash}"
-                    )
-                    track.mark_found()
-
-
-    async def _process_erc20_logs(self, block_num: int, contract_addresses: List[ChecksumAddress], tracks):
-        """
-        Use `eth_getLogs` to get only Transfer events for the specified addresses in this block.
-        """
-
         logs = await self.web3.eth.get_logs({
-            "fromBlock": block_num,
-            "toBlock": block_num,
+            "fromBlock": block_number,
+            "toBlock": block_number,
             "address": contract_addresses,
             "topics": [TRANSFER_TOPIC],
         })
 
+        found_transfers = self.process_erc20_logs(logs, tracks)
+        for ft in found_transfers:
+            self.logger.info(
+                f"Found ERC-20 Transfer: block={block_number}, "
+                f"to={ft.track.address}, amount={ft.track.amount}, tx=0x{ft.tx_hash}, contract={ft.track.contract_address}"
+            )
+            self.repository.remove_track(ft.track)
+
+    def process_erc20_logs(
+            self,
+            logs: List[LogReceipt],
+            tracks: Set[Track]
+    ) -> List[FoundTransfer]:
         if not logs:
-            return
+            return []
+
+        found_transfers = []
 
         for log_entry in logs:
             # log_entry["address"] is the contract that emitted Transfer
             contract_address = log_entry["address"].lower()
 
-            # Filter tracks for that contract (and not found yet)
+            # Filter tracks for that contract
             matching_tracks = [
                 t for t in tracks
-                if t.contract_address and t.contract_address.lower() == contract_address and not t.is_found
+                if t.contract_address and t.contract_address.lower() == contract_address
             ]
             if not matching_tracks:
                 continue
@@ -158,17 +177,13 @@ class TrackService:
             contract = self.web3.eth.contract(address=log_entry["address"], abi=ERC20_ABI)
             parsed_event = contract.events.Transfer().process_log(log_entry)
 
-            from_address = parsed_event.args["from"]
             to_address = parsed_event.args["to"]
             value_raw = parsed_event.args["value"]
 
-            decimals = await contract.functions.decimals().call()
-            value_human = Decimal(value_raw) / Decimal(10 ** decimals)
-
             for track in matching_tracks:
-                if to_address.lower() == track.address.lower() and value_human == track.amount:
-                    self.logger.info(
-                        f"Found ERC-20 Transfer: contract={contract_address}, block={block_num}, "
-                        f"from={from_address}, to={to_address}, amount={value_human}"
-                    )
-                    track.mark_found()
+                if to_address.lower() != track.address.lower():
+                    continue
+                value_human = Decimal(value_raw) / Decimal(10 ** track.decimals)
+                if value_human == track.amount:
+                    found_transfers.append(FoundTransfer(track=track, tx_hash=log_entry["transactionHash"].hex()))
+        return found_transfers

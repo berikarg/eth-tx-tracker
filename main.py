@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 import uvicorn
 
-from src.handler.track_handler import create_track_router  # <-- changed import
+from src.handler.track_handler import create_track_router
 from src.repository.track_repository import TrackRepository
 from src.service.track_service import TrackService
 
