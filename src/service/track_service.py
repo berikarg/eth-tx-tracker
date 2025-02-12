@@ -157,7 +157,7 @@ class TrackService:
             self.logger.error(f"Error fetching block {block_number}: {e}")
             return
 
-        self.logger.info(f"Checking block {block['number']}")
+        self.logger.info(f"Checking block {block_number}")
         try:
             await self._process_block(block)
         except Exception as e:

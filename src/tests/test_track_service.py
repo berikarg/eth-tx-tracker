@@ -183,7 +183,7 @@ def test_process_erc20_logs(description, logs, tracks, expected_found_transfers)
     """
     # Setup TrackService with a mock logger and web3
     mock_logger = MagicMock()
-    service = TrackService(repository=None, eth_rpc_url="", logger=mock_logger)
+    service = TrackService(repository=None, http_rpc_url="http://dummy", ws_rpc_url="ws://dummy", logger=mock_logger)
     service.web3 = MagicMock()
 
     # Mock the contract and `process_log` method
